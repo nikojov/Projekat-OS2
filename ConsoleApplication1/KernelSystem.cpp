@@ -8,7 +8,12 @@
 
 KernelSystem::KernelSystem(PhysicalAddress processVMSpace, PageNum processVMSpaceSize, PhysicalAddress pmtSpace, PageNum pmtSpaceSize, Partition * partition, System* mySystem)
 {
-
+	//provera da li imamo dovoljno prostora da smestimo neophodne strukture
+	if (PAGE_SIZE*pmtSpaceSize <= sizeof(bool)*partition->getNumOfClusters() + sizeof(Descriptor*)*processVMSpaceSize)
+	{
+		std::cout << "Nedovoljno prostora za neophodne strukture" << std::endl;
+		std::exit(1);
+	}
 	
 	
 	this->processVMSpace = processVMSpace;
@@ -56,8 +61,11 @@ KernelSystem::~KernelSystem()
 
 Process * KernelSystem::createProcess()
 {
-	int size = FIRST_TABLE_SIZE * sizeof(Descriptor**) / sizeof(Slot);
-	if (sizeof(Descriptor**) % sizeof(Slot))size+=FIRST_TABLE_SIZE;
+	int size = ( FIRST_TABLE_SIZE * sizeof(Descriptor**) ) / sizeof(Slot);
+
+	//if (sizeof(Descriptor**) % sizeof(Slot))	size+=FIRST_TABLE_SIZE; // koja je logika ove linije??
+	if ((FIRST_TABLE_SIZE * sizeof(Descriptor**)) % sizeof(Slot)) size += sizeof(Slot);	//nova verzija
+
 	Descriptor*** pmt = static_cast<Descriptor***>(allocateSpace(size));
 	if (pmt == nullptr) return nullptr;
 	for (int i = 0; i < FIRST_TABLE_SIZE; i++)pmt[i] = nullptr;
@@ -80,7 +88,7 @@ Process * KernelSystem::createProcess()
 
 
 PhysicalAddress KernelSystem::allocateSpace(int size) {
-
+	if (size < 1) return nullptr; // nevalidan parametar
 	mtxSpace.lock();
 	if (first == nullptr||freeSpace<size) {
 		mtxSpace.unlock();
@@ -89,6 +97,7 @@ PhysicalAddress KernelSystem::allocateSpace(int size) {
 
 	void* address = nullptr;
 	Slot *curr = first, *help = nullptr;
+	/*
 	while (size > curr->free) {
 		if (curr->next != 0) {
 			help = curr;
@@ -104,7 +113,17 @@ PhysicalAddress KernelSystem::allocateSpace(int size) {
 		mtxSpace.unlock();
 		return nullptr;
 	}
-		address = curr;
+	Nova verzija petlje*/
+	while (curr->free < size &&  curr->next != 0) {
+		help = curr;
+		curr = space + curr->next;
+	}
+	if (curr->free < size) {
+		mtxSpace.unlock();
+		return nullptr;
+	}
+	 
+	address = curr;
 	freeSpace = freeSpace - size;
 	if (size == curr->free) {
 		if (help == nullptr) {
@@ -144,6 +163,7 @@ PhysicalAddress KernelSystem::allocateSpace(int size) {
 
 void KernelSystem::deallocateSpace(PhysicalAddress addr, int size)
 {
+	if (size < 1 || addr==nullptr) return;
 	mtxSpace.lock();
 	Slot* empty = static_cast<Slot*>(addr);
 	if (first == nullptr) {
@@ -177,7 +197,7 @@ void KernelSystem::deallocateSpace(PhysicalAddress addr, int size)
 
 	if (first < empty) {
 		Slot* help = first, *help2 = nullptr;
-		while (help < empty&&help->next != 0) {
+		while (help < empty && help->next != 0) {
 			help2 = help;
 			help = space + help->next;
 		}
@@ -209,8 +229,8 @@ void KernelSystem::deallocateSpace(PhysicalAddress addr, int size)
 				mtxSpace.unlock();
 				return;
 			}
-			if ((help2 + help2->free) == empty) {//ako je samo odozdo slobodno parce memorije
-				help2->next = help - empty;
+			if ((help2 + help2->free) == empty) {//ako je samo odozgo slobodno parce memorije
+				help2->next = help - space;//MISLIM DA SE OVDEE DESAVAAA GRESKAA!!! UMESTO EMPTY TREBA SPACE
 				help2->free += size;
 
 				
@@ -218,7 +238,7 @@ void KernelSystem::deallocateSpace(PhysicalAddress addr, int size)
 				mtxSpace.unlock();
 				return;
 			}
-			if ((empty + size) == help) {//ako je samo odozgo slobodno parce memorije
+			if ((empty + size) == help) {//ako je samo odozdo slobodno parce memorije
 				help2->next = empty - space;
 				empty->free = size + help->free;
 				empty->next = help->next;
@@ -239,6 +259,7 @@ void KernelSystem::deallocateSpace(PhysicalAddress addr, int size)
 
 	}
 	std::cout << "GRESKA U DEALOKACIJI" << std::endl;
+	mtxSpace.unlock();
 	return;
 
 }
@@ -316,7 +337,7 @@ void KernelSystem::test() {
 }
 unsigned long * KernelSystem::getFreeClusters(int num) //ko zpve ovu funkciju treba da zatvori niz koji ona vraca jer je alociran sa new
 {
-	
+	if (num < 1) return nullptr;
 	mtxClusters.lock();
 
 	if (freeClusters < num) {
